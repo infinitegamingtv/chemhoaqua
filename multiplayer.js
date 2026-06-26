@@ -1,17 +1,34 @@
-// WebRTC Multiplayer Manager for Fruit Slasher (using PeerJS)
+// WebRTC Multiplayer Manager for Fruit Slasher (Host-Spectator Model)
 
 class MultiplayerManager {
     constructor() {
         this.peer = null;
-        this.conn = null;
+        this.connections = []; // For Host: list of client DataConnections
+        this.conn = null;        // For Client: connection to Host
+        
         this.isHost = false;
         this.roomCode = '';
-        this.opponentName = 'Đối thủ';
-        this.opponentScore = 0;
-        this.opponentSwipePoints = [];
         this.isActive = false;
         
-        // References to panels
+        // Local Player Info (For Clients)
+        this.myPeerId = '';
+        this.myName = '';
+        this.myColor = '';
+        
+        // Players Database (Synced across all peers)
+        this.players = [];
+        
+        this.playerColors = [
+            '#ff3b30', // Red
+            '#00c6ff', // Cyan
+            '#ffcc00', // Yellow
+            '#4cd964', // Green
+            '#af52de', // Purple
+            '#ff9500', // Orange
+            '#ff2d55', // Pink
+            '#5ac8fa'  // Light Blue
+        ];
+        
         this.initPanels();
     }
     
@@ -25,7 +42,9 @@ class MultiplayerManager {
             codeDisplay: () => document.getElementById('generated-room-code'),
             hostStatus: () => document.getElementById('host-status-text'),
             clientStatus: () => document.getElementById('client-status-text'),
-            copyBtn: () => document.getElementById('btn-copy-code')
+            copyBtn: () => document.getElementById('btn-copy-code'),
+            lobbyList: () => document.getElementById('mp-lobby-list'),
+            startBtn: () => document.getElementById('btn-mp-start-game')
         };
     }
     
@@ -35,11 +54,17 @@ class MultiplayerManager {
         this.dom.screen().classList.remove('hidden');
         this.dom.screen().classList.add('active');
         
-        // Reset panels
         this.dom.initial().classList.remove('hidden');
         this.dom.host().classList.add('hidden');
         this.dom.client().classList.add('hidden');
         this.dom.roomInput().value = '';
+        
+        // Restore name from localStorage
+        const savedName = localStorage.getItem('fruitSlasher_lastPlayer');
+        const nameInput = document.getElementById('mp-player-name');
+        if (savedName && nameInput) {
+            nameInput.value = savedName;
+        }
         
         this.isActive = false;
         this.cleanup();
@@ -56,21 +81,49 @@ class MultiplayerManager {
     
     cleanup() {
         this.isActive = false;
+        
+        // Close Host connections
+        this.connections.forEach(c => {
+            try { c.close(); } catch(e) {}
+        });
+        this.connections = [];
+        
+        // Close Client connection
         if (this.conn) {
             try { this.conn.close(); } catch(e) {}
             this.conn = null;
         }
+        
         if (this.peer) {
             try { this.peer.destroy(); } catch(e) {}
             this.peer = null;
         }
+        
         this.isHost = false;
         this.roomCode = '';
-        this.opponentSwipePoints = [];
+        this.players = [];
+        this.myPeerId = '';
+        this.myName = '';
+        this.myColor = '';
         
-        // Reset UI HUD
+        // Hide buttons
+        if (this.dom.startBtn()) this.dom.startBtn().classList.add('hidden');
+        if (this.dom.lobbyList()) {
+            this.dom.lobbyList().innerHTML = '<li style="color: var(--text-muted); font-size: 13px; font-style: italic;">Đang đợi người chơi kết nối...</li>';
+        }
+        
+        // Reset HUD Elements
         document.getElementById('single-score-box').classList.remove('hidden');
         document.getElementById('multi-score-box').classList.add('hidden');
+    }
+    
+    // --- Broadcast Helper for Host ---
+    broadcast(data) {
+        this.connections.forEach(c => {
+            if (c.open) {
+                c.send(data);
+            }
+        });
     }
     
     // --- Host Functions ---
@@ -83,12 +136,10 @@ class MultiplayerManager {
         this.dom.host().classList.remove('hidden');
         this.dom.hostStatus().innerText = 'Đang kết nối tới server signaling...';
         
-        // Generate random room code: e.g. FS + 4 digits
         const codeDigits = Math.floor(1000 + Math.random() * 9000);
         this.roomCode = `FS${codeDigits}`;
         this.dom.codeDisplay().innerText = this.roomCode;
         
-        // Initialize PeerJS
         this.peer = new Peer(this.roomCode, {
             debug: 1,
             config: {
@@ -100,26 +151,18 @@ class MultiplayerManager {
         });
         
         this.peer.on('open', (id) => {
-            this.dom.hostStatus().innerText = 'Đang đợi đối thủ kết nối...';
+            this.dom.hostStatus().innerText = 'Đang đợi người chơi tham gia...';
             this.setupCopyButton();
         });
         
         this.peer.on('connection', (connection) => {
-            if (this.conn) {
-                // Already have a player, reject others
-                connection.on('open', () => {
-                    connection.send({ type: 'reject', reason: 'Room is full' });
-                    setTimeout(() => connection.close(), 500);
-                });
-                return;
-            }
-            this.conn = connection;
-            this.setupConnection();
+            this.connections.push(connection);
+            this.setupHostConnection(connection);
         });
         
         this.peer.on('error', (err) => {
-            console.error('PeerJS error:', err);
-            this.dom.hostStatus().innerText = `Lỗi khởi tạo: Có thể mã phòng bị trùng. Vui lòng thử lại.`;
+            console.error('Host PeerJS error:', err);
+            this.dom.hostStatus().innerText = `Lỗi khởi tạo phòng. Vui lòng thử lại.`;
         });
     }
     
@@ -138,10 +181,79 @@ class MultiplayerManager {
         };
     }
     
+    setupHostConnection(connection) {
+        connection.on('open', () => {
+            this.isActive = true;
+            // Simply mark as active. We wait for client to send a 'join-request' with their name.
+        });
+        
+        connection.on('data', (data) => {
+            this.handleHostIncomingData(connection, data);
+        });
+        
+        connection.on('close', () => {
+            this.handlePlayerDisconnect(connection.peer);
+        });
+        
+        connection.on('error', (err) => {
+            console.error('Connection error on player:', connection.peer, err);
+            this.handlePlayerDisconnect(connection.peer);
+        });
+    }
+    
+    handlePlayerDisconnect(peerId) {
+        this.connections = this.connections.filter(c => c.peer !== peerId);
+        this.players = this.players.filter(p => p.id !== peerId);
+        
+        // Sync new list
+        this.broadcast({
+            type: 'players-list',
+            players: this.players
+        });
+        
+        this.updateLobbyList();
+        
+        if (this.players.length === 0) {
+            this.dom.startBtn().classList.add('hidden');
+            this.dom.hostStatus().innerText = 'Đang đợi người chơi tham gia...';
+        }
+        
+        if (window.gameInstance && window.gameInstance.gameState === 'PLAYING') {
+            // If playing, update local scoreboard sidebar
+            window.gameInstance.updateMultiplayerScoreboardHUD();
+        }
+    }
+    
+    updateLobbyList() {
+        const list = this.dom.lobbyList();
+        list.innerHTML = '';
+        
+        if (this.players.length === 0) {
+            list.innerHTML = '<li style="color: var(--text-muted); font-size: 13px; font-style: italic;">Đang đợi người chơi kết nối...</li>';
+            return;
+        }
+        
+        this.players.forEach(p => {
+            const li = document.createElement('li');
+            li.style.color = p.color;
+            li.style.fontWeight = '800';
+            li.style.fontSize = '14px';
+            li.style.display = 'flex';
+            li.style.alignItems = 'center';
+            li.innerHTML = `<span style="width:8px; height:8px; border-radius:50%; background-color:${p.color}; margin-right:8px; display:inline-block;"></span> ${p.name} (Đã sẵn sàng)`;
+            list.appendChild(li);
+        });
+    }
+    
     // --- Client Functions ---
     
     joinRoom() {
         window.gameAudio.playClick();
+        const nameInput = document.getElementById('mp-player-name').value.trim();
+        if (!nameInput) {
+            alert('Vui lòng nhập biệt danh của bạn trước khi vào phòng!');
+            return;
+        }
         const codeInput = this.dom.roomInput().value.trim().toUpperCase();
         if (!codeInput || codeInput.length < 5) {
             alert('Vui lòng nhập mã phòng hợp lệ!');
@@ -151,12 +263,13 @@ class MultiplayerManager {
         this.cleanup();
         this.isHost = false;
         this.roomCode = codeInput;
+        this.myName = nameInput;
+        localStorage.setItem('fruitSlasher_lastPlayer', nameInput);
         
         this.dom.initial().classList.add('hidden');
         this.dom.client().classList.remove('hidden');
-        this.dom.clientStatus().innerText = 'Đang khởi tạo kết nối...';
+        this.dom.clientStatus().innerText = 'Đang kết nối tới phòng...';
         
-        // Client connects to peer server with random ID, then dials Host
         this.peer = new Peer(null, {
             debug: 1,
             config: {
@@ -168,57 +281,36 @@ class MultiplayerManager {
         });
         
         this.peer.on('open', (id) => {
-            this.dom.clientStatus().innerText = `Đang kết nối tới phòng ${this.roomCode}...`;
+            this.dom.clientStatus().innerText = `Đang tham gia phòng ${this.roomCode}...`;
             
-            // Connect to host room code
             this.conn = this.peer.connect(this.roomCode, {
                 reliable: true
             });
-            this.setupConnection();
+            this.setupClientConnection();
         });
         
         this.peer.on('error', (err) => {
             console.error('Client PeerJS error:', err);
-            this.dom.clientStatus().innerText = `Không tìm thấy phòng ${this.roomCode} hoặc lỗi kết nối.`;
+            this.dom.clientStatus().innerText = `Không tìm thấy phòng ${this.roomCode} hoặc kết nối bị từ chối.`;
         });
     }
     
-    // --- Common Connection Handling ---
-    
-    setupConnection() {
+    setupClientConnection() {
         this.conn.on('open', () => {
             this.isActive = true;
-            
-            // Sync status
-            if (this.isHost) {
-                this.dom.hostStatus().innerText = 'Đã kết nối! Đang tải game...';
-                // Send welcome message
-                this.send({
-                    type: 'welcome',
-                    name: 'HOST'
-                });
-            } else {
-                this.dom.clientStatus().innerText = 'Đã kết nối! Đang đợi host bắt đầu...';
-            }
-            
-            // Hide connection screen and load Multiplayer game
-            setTimeout(() => {
-                this.dom.screen().classList.add('hidden');
-                this.dom.screen().classList.remove('active');
-                
-                // Trigger multiplayer start in game engine
-                if (window.gameInstance) {
-                    window.gameInstance.startMultiplayerGame();
-                }
-            }, 1000);
+            this.dom.clientStatus().innerText = 'Đã kết nối! Đang đợi chủ phòng bắt đầu trận đấu...';
+            this.send({
+                type: 'join-request',
+                name: this.myName
+            });
         });
         
         this.conn.on('data', (data) => {
-            this.handleIncomingData(data);
+            this.handleClientIncomingData(data);
         });
         
         this.conn.on('close', () => {
-            alert('Mất kết nối với đối thủ!');
+            alert('Chủ phòng đã đóng kết nối hoặc kết nối bị mất!');
             if (window.gameInstance) {
                 window.gameInstance.exitToMenu();
             }
@@ -227,7 +319,7 @@ class MultiplayerManager {
         
         this.conn.on('error', (err) => {
             console.error('Connection error:', err);
-            alert('Lỗi đường truyền WebRTC!');
+            alert('Mất kết nối với phòng!');
             if (window.gameInstance) {
                 window.gameInstance.exitToMenu();
             }
@@ -249,29 +341,108 @@ class MultiplayerManager {
         });
     }
     
-    // --- Data Processing Protocol ---
+    // --- Data Handlers ---
     
-    handleIncomingData(data) {
+    handleHostIncomingData(connection, data) {
         if (!data || !this.isActive) return;
         
-        switch(data.type) {
-            case 'welcome':
-                this.opponentName = this.isHost ? 'GUEST' : 'HOST';
-                break;
+        if (data.type === 'join-request') {
+            const playerIndex = this.players.length;
+            const name = data.name ? data.name.trim().substring(0, 12) : `Người chơi ${playerIndex + 1}`;
+            const color = this.playerColors[playerIndex % this.playerColors.length];
+            
+            const playerData = {
+                id: connection.peer,
+                name: name,
+                score: 0,
+                color: color,
+                swipePoints: []
+            };
+            
+            this.players.push(playerData);
+            
+            // 1. Send connection setup to that specific client
+            connection.send({
+                type: 'setup',
+                yourId: connection.peer,
+                name: name,
+                color: color
+            });
+            
+            // 2. Broadcast updated player list to all connected players
+            this.broadcast({
+                type: 'players-list',
+                players: this.players
+            });
+            
+            // 3. Update Host UI elements
+            this.updateLobbyList();
+            this.dom.hostStatus().innerText = 'Người chơi đã kết nối! Nhấn Bắt đầu chơi.';
+            
+            // Show start button
+            this.dom.startBtn().classList.remove('hidden');
+            this.dom.startBtn().onclick = () => {
+                window.gameAudio.playClick();
+                this.dom.startBtn().classList.add('hidden');
                 
-            case 'swipe':
-                this.opponentSwipePoints = data.points;
-                break;
+                // Hide screen and trigger Host Spectator Mode
+                this.dom.screen().classList.add('hidden');
+                this.dom.screen().classList.remove('active');
                 
-            case 'spawn':
-                if (!this.isHost && window.gameInstance) {
-                    window.gameInstance.syncSpawnFruit(data);
+                // Broadcast Start game to clients
+                this.broadcast({ type: 'start-match' });
+                
+                if (window.gameInstance) {
+                    window.gameInstance.startMultiplayerGame();
                 }
+            };
+            return;
+        }
+        
+        const player = this.players.find(p => p.id === connection.peer);
+        if (!player) return;
+        
+        switch(data.type) {
+            case 'swipe':
+                player.swipePoints = data.points;
                 break;
                 
             case 'slice':
-                if (this.isHost && window.gameInstance) {
-                    window.gameInstance.verifyClientSlice(data.id, data.angle, data.hitX, data.hitY);
+                if (window.gameInstance) {
+                    window.gameInstance.verifyClientSlice(data.id, data.angle, data.hitX, data.hitY, connection.peer);
+                }
+                break;
+        }
+    }
+    
+    handleClientIncomingData(data) {
+        if (!data || !this.isActive) return;
+        
+        switch(data.type) {
+            case 'setup':
+                this.myPeerId = data.yourId;
+                this.myName = data.name;
+                this.myColor = data.color;
+                break;
+                
+            case 'players-list':
+                this.players = data.players;
+                if (window.gameInstance && window.gameInstance.gameState === 'PLAYING') {
+                    window.gameInstance.updateMultiplayerScoreboardHUD();
+                }
+                break;
+                
+            case 'start-match':
+                this.dom.screen().classList.add('hidden');
+                this.dom.screen().classList.remove('active');
+                if (window.gameInstance) {
+                    window.gameInstance.startMultiplayerGame();
+                }
+                break;
+                
+            case 'spawn':
+                if (window.gameInstance) {
+                    window.gameInstance.syncSpawnFruit(data);
                 }
                 break;
                 
@@ -294,7 +465,7 @@ class MultiplayerManager {
                 break;
                 
             case 'sync-time':
-                if (!this.isHost && window.gameInstance) {
+                if (window.gameInstance) {
                     window.gameInstance.timeRemaining = data.time;
                 }
                 break;
@@ -315,12 +486,6 @@ class MultiplayerManager {
                 if (window.gameInstance) {
                     window.gameInstance.exitToMenu();
                 }
-                break;
-                
-            case 'reject':
-                alert(`Không thể kết nối: ${data.reason}`);
-                this.cleanup();
-                this.backToMenu();
                 break;
         }
     }

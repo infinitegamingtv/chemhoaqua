@@ -29,14 +29,9 @@
                         <span id="score-val" class="hud-value">0</span>
                     </div>
                     <div class="multi-score-container hidden" id="multi-score-box">
-                        <div class="score-sub-box host">
-                            <span class="hud-label" id="p1-name">BẠN</span>
-                            <span id="p1-score-val" class="hud-value color-p1">0</span>
-                        </div>
-                        <div class="score-vs-divider">VS</div>
-                        <div class="score-sub-box client">
-                            <span class="hud-label" id="p2-name">ĐỐI THỦ</span>
-                            <span id="p2-score-val" class="hud-value color-p2">0</span>
+                        <span class="hud-label">BẢNG XẾP HẠNG</span>
+                        <div id="mp-scoreboard-list">
+                            <!-- Populated dynamically -->
                         </div>
                     </div>
                     <div id="combo-display" class="hud-combo">
@@ -142,6 +137,10 @@
                     <p style="margin-bottom: 20px; font-size: 14px; color: var(--text-muted);">
                         Chém hoa quả đối kháng thời gian thực. Chọn một trong hai lựa chọn bên dưới:
                     </p>
+                    <div class="input-name-box" style="margin-bottom: 20px; width: 100%; max-width: 380px; margin-left: auto; margin-right: auto; text-align: left;">
+                        <span class="hud-label" style="display: block; margin-bottom: 6px; font-size: 11px;">BIỆT DANH CỦA BẠN:</span>
+                        <input type="text" id="mp-player-name" placeholder="Nhập tên..." maxlength="12" style="width: 100%; padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); color: #fff; text-align: center; font-family: var(--font-display); font-size: 16px; font-weight: 800; outline: none; border-bottom: 3px solid rgba(255, 94, 0, 0.4);" />
+                    </div>
                     <div class="btn-group-vertical">
                         <button class="btn btn-primary" id="btn-mp-create">TẠO PHÒNG MỚI</button>
                         <div style="margin: 15px 0; color: var(--text-muted); font-weight: 800; font-size: 12px; letter-spacing: 2px;">HOẶC</div>
@@ -162,7 +161,19 @@
                             <button id="btn-copy-code" class="btn btn-secondary small" style="padding: 6px 12px; font-size:12px; margin: 0; border-radius: 8px;">COPY</button>
                         </div>
                     </div>
-                    <p class="status-msg" id="host-status-text" style="color: var(--accent-orange); font-weight: 800; font-size: 14px; animation: pulse 1s infinite alternate;">Đang đợi đối thủ kết nối...</p>
+                    <p class="status-msg" id="host-status-text" style="color: var(--accent-orange); font-weight: 800; font-size: 14px; animation: pulse 1s infinite alternate; margin-bottom: 12px;">Đang đợi đối thủ kết nối...</p>
+                    
+                    <!-- Connected Players List in Lobby -->
+                    <div id="mp-lobby-players" style="margin-top: 16px; text-align: left; background: rgba(0,0,0,0.25); padding: 16px; border-radius: 16px; border: 1px solid var(--glass-border); max-height: 180px; overflow-y: auto; width: 100%;">
+                        <span class="hud-label" style="display: block; margin-bottom: 8px; font-size: 10px;">NGƯỜI CHƠI ĐÃ THAM GIA:</span>
+                        <ul id="mp-lobby-list" style="list-style: none; display: flex; flex-direction: column; gap: 6px; padding: 0;">
+                            <li style="color: var(--text-muted); font-size: 13px; font-style: italic;">Đang đợi người chơi kết nối...</li>
+                        </ul>
+                    </div>
+                    
+                    <button class="btn btn-primary hidden" id="btn-mp-start-game" style="margin: 16px auto 0 auto; background: linear-gradient(135deg, #4cd964, #2b5c2a); border-bottom: 4px solid #1a4019; max-width: 220px; justify-content: center; font-weight: 900;">
+                        BẮT ĐẦU CHƠI
+                    </button>
                 </div>
                 
                 <!-- Client Connecting Panel -->
@@ -216,7 +227,8 @@
                 <h1 class="game-over-title">HOÀN THÀNH</h1>
                 <p id="game-over-mode-title" class="sub-title">CHẾ ĐỘ CLASSIC</p>
                 
-                <div class="stats-card">
+                <!-- Single Player Stats Card -->
+                <div class="stats-card" id="sp-stats-box">
                     <div class="stat-row highlight">
                         <span class="stat-label">Tổng Điểm:</span>
                         <span id="final-score" class="stat-value">0</span>
@@ -232,6 +244,14 @@
                     <div id="new-high-score-banner" class="high-score-banner hidden">
                         ★ KỶ LỤC MỚI! ★
                     </div>
+                </div>
+
+                <!-- Multiplayer Final Rankings Card -->
+                <div class="stats-card hidden" id="mp-rankings-box" style="border-top: 4px solid var(--accent-purple);">
+                    <span class="hud-label" style="display: block; margin-bottom: 12px; font-size: 11px;">BẢNG XẾP HẠNG CHUNG CUỘC</span>
+                    <ul id="mp-final-rankings-list" style="list-style: none; display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 0;">
+                        <!-- Dynamic Rankings populated as list items -->
+                    </ul>
                 </div>
 
                 <!-- Highscore Input (Show if qualified) -->

@@ -159,19 +159,14 @@ class GameEngine {
         this.fruitIdCounter = 0;
         this.lastSyncedTime = 0;
         
-        // Hide single score, show dual scores
+        // Hide single score, show multiplayer scoreboard list
         document.getElementById('single-score-box').classList.add('hidden');
         document.getElementById('multi-score-box').classList.remove('hidden');
         
-        // Assign player names based on role
-        const isHost = window.gameMultiplayer.isHost;
-        document.getElementById('p1-name').innerText = isHost ? 'BẠN (HOST)' : 'HOST';
-        document.getElementById('p2-name').innerText = isHost ? 'ĐỐI THỦ' : 'BẠN';
+        // Update list of players initially
+        this.updateMultiplayerScoreboardHUD();
         
-        document.getElementById('p1-score-val').innerText = '0';
-        document.getElementById('p2-score-val').innerText = '0';
-        
-        // Multiplayer is Zen mode base (90s, no lives, just score comparison)
+        // Start Zen Mode (90 seconds score race)
         this.startGame('ZEN');
     }
     
@@ -209,7 +204,7 @@ class GameEngine {
             this.spawnInterval = 1400;
         } else if (mode === 'ZEN') {
             this.lives = 0;
-            this.timeRemaining = 90; // 90 seconds
+            this.timeRemaining = this.isMultiplayer ? 15 : 90; // 15 seconds in multiplayer, 90 seconds in single-player
             document.getElementById('lives-container').classList.add('hidden');
             document.getElementById('timer-container').classList.remove('hidden');
             document.getElementById('timer-val').innerText = this.timeRemaining;
@@ -254,7 +249,7 @@ class GameEngine {
         document.getElementById('btn-gameplay-pause').classList.add('hidden');
         
         if (this.isMultiplayer && window.gameMultiplayer.isHost) {
-            window.gameMultiplayer.send({ type: 'pause' });
+            window.gameMultiplayer.broadcast({ type: 'pause' });
         }
     }
     
@@ -290,7 +285,7 @@ class GameEngine {
         this.lastTime = performance.now();
         
         if (this.isMultiplayer && window.gameMultiplayer.isHost) {
-            window.gameMultiplayer.send({ type: 'resume' });
+            window.gameMultiplayer.broadcast({ type: 'resume' });
         }
     }
     
@@ -322,7 +317,11 @@ class GameEngine {
         document.getElementById('menu-screen').classList.add('active');
         
         if (this.isMultiplayer) {
-            window.gameMultiplayer.send({ type: 'exit' });
+            if (window.gameMultiplayer.isHost) {
+                window.gameMultiplayer.broadcast({ type: 'exit' });
+            } else {
+                window.gameMultiplayer.send({ type: 'exit' });
+            }
             window.gameMultiplayer.cleanup();
             this.isMultiplayer = false;
         }
@@ -345,46 +344,84 @@ class GameEngine {
         const nameInputBox = document.getElementById('name-input-container');
         const newHighScoreBanner = document.getElementById('new-high-score-banner');
         
+        const spStats = document.getElementById('sp-stats-box');
+        const mpStats = document.getElementById('mp-rankings-box');
+        
         if (this.isMultiplayer) {
             // Multiplayer Game Over
             document.getElementById('game-over-mode-title').innerText = 'ĐỐI KHÁNG MULTIPLAYER';
             
-            const isHost = window.gameMultiplayer.isHost;
-            const myScore = this.score;
-            const opScore = this.opponentScore;
-            
-            document.getElementById('final-score').innerText = `${myScore} - ${opScore}`;
-            document.getElementById('max-combo').innerText = `${this.maxCombo}x`;
-            document.getElementById('sliced-count').innerText = this.slicedCount;
-            
+            spStats.classList.add('hidden');
+            mpStats.classList.remove('hidden');
             nameInputBox.classList.add('hidden');
             newHighScoreBanner.classList.remove('hidden');
             
-            if (myScore > opScore) {
-                newHighScoreBanner.innerText = '★ BẠN ĐÃ CHIẾN THẮNG! ★';
-                newHighScoreBanner.style.background = 'linear-gradient(90deg, #4cd964, #5ac8fa)';
-                newHighScoreBanner.style.color = '#fff';
-            } else if (myScore < opScore) {
-                newHighScoreBanner.innerText = '☠ BẠN ĐÃ THUA CUỘC! ☠';
-                newHighScoreBanner.style.background = 'linear-gradient(90deg, #ff3b30, #ff9500)';
-                newHighScoreBanner.style.color = '#fff';
-            } else {
-                newHighScoreBanner.innerText = '☯ HÒA NHAU! ☯';
-                newHighScoreBanner.style.background = 'linear-gradient(90deg, #8e8e93, #d1d1d6)';
-                newHighScoreBanner.style.color = '#000';
-            }
+            // Sort players list descending
+            const sorted = [...window.gameMultiplayer.players].sort((a, b) => b.score - a.score);
             
-            // Host sends score to Client
+            // Compile rankings display
+            const list = document.getElementById('mp-final-rankings-list');
+            list.innerHTML = '';
+            sorted.forEach((p, idx) => {
+                const li = document.createElement('li');
+                li.style.display = 'flex';
+                li.style.justifyContent = 'space-between';
+                li.style.alignItems = 'center';
+                li.style.padding = '8px 12px';
+                li.style.background = 'rgba(255,255,255,0.03)';
+                li.style.borderRadius = '10px';
+                li.style.border = `1px solid ${p.color}40`;
+                li.style.color = p.color;
+                li.style.fontWeight = '800';
+                
+                const isMe = p.id === window.gameMultiplayer.myPeerId;
+                const displayName = isMe ? `${p.name} (BẠN)` : p.name;
+                
+                li.innerHTML = `
+                    <div style="display:flex; align-items:center;">
+                        <span style="width:24px; font-weight:900;">#${idx+1}</span>
+                        <span>${displayName}</span>
+                    </div>
+                    <span>${p.score} đ</span>
+                `;
+                list.appendChild(li);
+            });
+            
+            // Declare winner banner
+            const isHost = window.gameMultiplayer.isHost;
             if (isHost) {
-                window.gameMultiplayer.send({
+                if (sorted.length > 0) {
+                    newHighScoreBanner.innerText = `★ CHIẾN THẮNG: ${sorted[0].name.toUpperCase()} ★`;
+                    newHighScoreBanner.style.background = sorted[0].color;
+                    newHighScoreBanner.style.color = '#fff';
+                } else {
+                    newHighScoreBanner.innerText = 'Trận đấu kết thúc!';
+                }
+                
+                // Broadcast final scores to everyone
+                window.gameMultiplayer.broadcast({
                     type: 'game-over',
-                    scoreP1: myScore, // P1 score (Host)
-                    scoreP2: opScore  // P2 score (Client)
+                    players: window.gameMultiplayer.players
                 });
+            } else {
+                // Client side displays their own ranking
+                const myRankIdx = sorted.findIndex(p => p.id === window.gameMultiplayer.myPeerId);
+                if (myRankIdx === 0) {
+                    newHighScoreBanner.innerText = '★ CHIẾN THẮNG! BẠN VÔ ĐỊCH! ★';
+                    newHighScoreBanner.style.background = 'linear-gradient(90deg, #4cd964, #5ac8fa)';
+                    newHighScoreBanner.style.color = '#fff';
+                } else {
+                    newHighScoreBanner.innerText = `HẠNG #${myRankIdx + 1} / ${sorted.length}`;
+                    newHighScoreBanner.style.background = 'linear-gradient(90deg, #ff9500, #ff2d55)';
+                    newHighScoreBanner.style.color = '#fff';
+                }
             }
         } else {
             // Single Player Game Over
             document.getElementById('game-over-mode-title').innerText = `CHẾ ĐỘ ${this.gameMode}`;
+            spStats.classList.remove('hidden');
+            mpStats.classList.add('hidden');
+            
             document.getElementById('final-score').innerText = this.score;
             document.getElementById('max-combo').innerText = `${this.maxCombo}x`;
             document.getElementById('sliced-count').innerText = this.slicedCount;
@@ -417,29 +454,58 @@ class GameEngine {
         
         document.getElementById('game-over-mode-title').innerText = 'ĐỐI KHÁNG MULTIPLAYER';
         
-        const myScore = this.score;
-        const opScore = this.opponentScore;
-        
-        document.getElementById('final-score').innerText = `${myScore} - ${opScore}`;
-        document.getElementById('max-combo').innerText = `${this.maxCombo}x`;
-        document.getElementById('sliced-count').innerText = this.slicedCount;
+        const spStats = document.getElementById('sp-stats-box');
+        const mpStats = document.getElementById('mp-rankings-box');
+        spStats.classList.add('hidden');
+        mpStats.classList.remove('hidden');
         
         document.getElementById('name-input-container').classList.add('hidden');
         const banner = document.getElementById('new-high-score-banner');
         banner.classList.remove('hidden');
         
-        if (myScore > opScore) {
-            banner.innerText = '★ BẠN ĐÃ CHIẾN THẮNG! ★';
+        // Sync players
+        window.gameMultiplayer.players = data.players;
+        
+        const sorted = [...window.gameMultiplayer.players].sort((a, b) => b.score - a.score);
+        
+        // Compile rankings
+        const list = document.getElementById('mp-final-rankings-list');
+        list.innerHTML = '';
+        sorted.forEach((p, idx) => {
+            const li = document.createElement('li');
+            li.style.display = 'flex';
+            li.style.justifyContent = 'space-between';
+            li.style.alignItems = 'center';
+            li.style.padding = '8px 12px';
+            li.style.background = 'rgba(255,255,255,0.03)';
+            li.style.borderRadius = '10px';
+            li.style.border = `1px solid ${p.color}40`;
+            li.style.color = p.color;
+            li.style.fontWeight = '800';
+            
+            const isMe = p.id === window.gameMultiplayer.myPeerId;
+            const displayName = isMe ? `${p.name} (BẠN)` : p.name;
+            
+            li.innerHTML = `
+                <div style="display:flex; align-items:center;">
+                    <span style="width:24px; font-weight:900;">#${idx+1}</span>
+                    <span>${displayName}</span>
+                </div>
+                <span>${p.score} đ</span>
+            `;
+            list.appendChild(li);
+        });
+        
+        // Show local rank
+        const myRankIdx = sorted.findIndex(p => p.id === window.gameMultiplayer.myPeerId);
+        if (myRankIdx === 0) {
+            banner.innerText = '★ CHIẾN THẮNG! BẠN VÔ ĐỊCH! ★';
             banner.style.background = 'linear-gradient(90deg, #4cd964, #5ac8fa)';
             banner.style.color = '#fff';
-        } else if (myScore < opScore) {
-            banner.innerText = '☠ BẠN ĐÃ THUA CUỘC! ☠';
-            banner.style.background = 'linear-gradient(90deg, #ff3b30, #ff9500)';
-            banner.style.color = '#fff';
         } else {
-            banner.innerText = '☯ HÒA NHAU! ☯';
-            banner.style.background = 'linear-gradient(90deg, #8e8e93, #d1d1d6)';
-            banner.style.color = '#000';
+            banner.innerText = `HẠNG #${myRankIdx + 1} / ${sorted.length}`;
+            banner.style.background = 'linear-gradient(90deg, #ff9500, #ff2d55)';
+            banner.style.color = '#fff';
         }
     }
     
@@ -475,6 +541,7 @@ class GameEngine {
     setupInputListeners() {
         const handleStart = (x, y) => {
             if (this.gameState !== 'PLAYING') return;
+            if (this.isMultiplayer && window.gameMultiplayer.isHost) return; // HOST DOES NOT PLAY (SPECTATOR ONLY)
             this.isSlicing = true;
             this.swipePoints = [{ x, y, time: performance.now() }];
             this.swipeSliceQueue = [];
@@ -791,7 +858,7 @@ class GameEngine {
         
         // Broadcast spawn if host
         if (this.isMultiplayer && window.gameMultiplayer.isHost) {
-            window.gameMultiplayer.send({
+            window.gameMultiplayer.broadcast({
                 type: 'spawn',
                 id: obj.id,
                 objectType: objectType,
@@ -860,7 +927,6 @@ class GameEngine {
     // --- WebRTC Multiplayer Sync Hooks ---
     
     syncSpawnFruit(data) {
-        // Client side spawning driven by Host coordinates
         let obj = null;
         if (data.objectType === 'BOMB') {
             obj = new BombObject(data.x, data.y, data.vx, data.vy, data.spinSpeed);
@@ -878,88 +944,41 @@ class GameEngine {
         this.fruits.push(obj);
     }
     
-    verifyHostSlice(fruitId, angle, hitX, hitY) {
+    verifyClientSlice(fruitId, angle, hitX, hitY, peerId) {
         const obj = this.fruits.find(f => f.id === fruitId);
         if (!obj || obj.sliced) return;
         
-        if (obj.isBomb) {
-            if (this.gameMode === 'CLASSIC') {
-                this.gameOver();
-            } else {
-                this.score = Math.max(0, this.score - 10);
-                document.getElementById('p1-score-val').innerText = this.score;
-                window.gameMultiplayer.send({
-                    type: 'bomb-slice',
-                    playerIndex: 1,
-                    scoreP1: this.score,
-                    scoreP2: this.opponentScore,
-                    fruitId: fruitId
-                });
-                this.triggerBombExplosionLocal(obj);
-            }
-        } else {
-            // Calculate score with powerups
-            const doubleActive = this.activePowerups.double > performance.now();
-            const pointsGained = obj.points * (doubleActive ? 2 : 1);
-            this.score += pointsGained;
-            
-            // Trigger local HUD combo queue additions
-            this.swipeSliceQueue.push(obj);
-            if (this.comboResetTimer) clearTimeout(this.comboResetTimer);
-            this.comboResetTimer = setTimeout(() => this.evaluateCombo(), 180);
-            
-            // Broadcast slice confirmation to Client
-            window.gameMultiplayer.send({
-                type: 'slice-confirmed',
-                id: fruitId,
-                playerIndex: 1,
-                scoreP1: this.score,
-                scoreP2: this.opponentScore,
-                hitX: hitX,
-                hitY: hitY,
-                angle: angle
-            });
-            
-            // Execute locally
-            this.executeSliceLocal(obj, hitX, hitY, angle, 1);
-        }
-    }
-    
-    verifyClientSlice(fruitId, angle, hitX, hitY) {
-        const obj = this.fruits.find(f => f.id === fruitId);
-        if (!obj || obj.sliced) return;
+        const player = window.gameMultiplayer.players.find(p => p.id === peerId);
+        if (!player) return;
         
         if (obj.isBomb) {
-            if (this.gameMode === 'CLASSIC') {
-                this.gameOver();
-            } else {
-                this.opponentScore = Math.max(0, this.opponentScore - 10);
-                document.getElementById('p2-score-val').innerText = this.opponentScore;
-                window.gameMultiplayer.send({
-                    type: 'bomb-slice',
-                    playerIndex: 2,
-                    scoreP1: this.score,
-                    scoreP2: this.opponentScore,
-                    fruitId: fruitId
-                });
-                this.triggerBombExplosionLocal(obj);
-            }
+            player.score = Math.max(0, player.score - 10);
+            window.gameMultiplayer.broadcast({
+                type: 'bomb-slice',
+                fruitId: fruitId,
+                peerId: peerId,
+                players: window.gameMultiplayer.players
+            });
+            this.triggerBombExplosionLocal(obj);
+            this.updateMultiplayerScoreboardHUD();
         } else {
-            // Calculate score for P2 (Client)
-            this.opponentScore += obj.points; // simpler, powerups only apply to who slices
+            // Increment score for the slicing player
+            player.score += obj.points;
             
-            window.gameMultiplayer.send({
+            // Broadcast slice confirmation to all clients
+            window.gameMultiplayer.broadcast({
                 type: 'slice-confirmed',
                 id: fruitId,
-                playerIndex: 2,
-                scoreP1: this.score,
-                scoreP2: this.opponentScore,
+                peerId: peerId,
                 hitX: hitX,
                 hitY: hitY,
-                angle: angle
+                angle: angle,
+                players: window.gameMultiplayer.players
             });
             
-            this.executeSliceLocal(obj, hitX, hitY, angle, 2);
+            // Execute locally on Host's Spectator screen
+            this.executeSliceLocal(obj, hitX, hitY, angle, peerId);
+            this.updateMultiplayerScoreboardHUD();
         }
     }
     
@@ -967,30 +986,42 @@ class GameEngine {
         const obj = this.fruits.find(f => f.id === data.id);
         if (!obj) return;
         
-        // Sync Scores
-        if (window.gameMultiplayer.isHost) {
-            this.score = data.scoreP1;
-            this.opponentScore = data.scoreP2;
-        } else {
-            this.score = data.scoreP2;
-            this.opponentScore = data.scoreP1;
+        // Sync players database and re-render HUD sidebar scoreboard
+        window.gameMultiplayer.players = data.players;
+        this.updateMultiplayerScoreboardHUD();
+        
+        // Sync stats if it was us
+        const isMe = data.peerId === window.gameMultiplayer.myPeerId;
+        if (isMe) {
+            this.score = window.gameMultiplayer.players.find(p => p.id === window.gameMultiplayer.myPeerId).score;
+            this.slicedCount++;
             
-            // Add combo check locally if client sliced it
-            if (data.playerIndex === 2) {
-                this.swipeSliceQueue.push(obj);
-                if (this.comboResetTimer) clearTimeout(this.comboResetTimer);
-                this.comboResetTimer = setTimeout(() => this.evaluateCombo(), 180);
-            }
+            this.swipeSliceQueue.push(obj);
+            if (this.comboResetTimer) clearTimeout(this.comboResetTimer);
+            this.comboResetTimer = setTimeout(() => this.evaluateCombo(), 180);
         }
         
-        document.getElementById('p1-score-val').innerText = data.scoreP1;
-        document.getElementById('p2-score-val').innerText = data.scoreP2;
-        
-        // Execute splice split and juice rendering
-        this.executeSliceLocal(obj, data.hitX, data.hitY, data.angle, data.playerIndex);
+        this.executeSliceLocal(obj, data.hitX, data.hitY, data.angle, data.peerId);
     }
     
-    executeSliceLocal(obj, hitX, hitY, angle, playerIndex) {
+    syncBombExplosion(data) {
+        const obj = this.fruits.find(f => f.id === data.fruitId);
+        if (!obj) return;
+        
+        // Sync players list
+        window.gameMultiplayer.players = data.players;
+        this.updateMultiplayerScoreboardHUD();
+        
+        const isMe = data.peerId === window.gameMultiplayer.myPeerId;
+        if (isMe) {
+            this.score = window.gameMultiplayer.players.find(p => p.id === window.gameMultiplayer.myPeerId).score;
+            this.showNegativePointsIndicator(obj.x, obj.y, -10);
+        }
+        
+        this.triggerBombExplosionLocal(obj);
+    }
+    
+    executeSliceLocal(obj, hitX, hitY, angle, peerId) {
         obj.sliced = true;
         obj.sliceAngle = angle;
         
@@ -1013,11 +1044,12 @@ class GameEngine {
         };
         obj.halves = [leftHalf, rightHalf];
         
-        const isMe = (window.gameMultiplayer.isHost && playerIndex === 1) || (!window.gameMultiplayer.isHost && playerIndex === 2);
-        if (isMe) {
-            this.slicedCount++;
+        // Resolve slicing player color
+        let splatColor = obj.juiceColor;
+        const player = window.gameMultiplayer.players.find(p => p.id === peerId);
+        if (player) {
+            splatColor = player.color;
         }
-        const splatColor = isMe ? obj.juiceColor : '#00c6ff';
         
         this.backgroundSplats.push(new BackgroundSplat(hitX, hitY, splatColor));
         
@@ -1051,26 +1083,30 @@ class GameEngine {
         }
     }
     
-    syncBombExplosion(data) {
-        const obj = this.fruits.find(f => f.id === data.fruitId);
-        if (!obj) return;
+    updateMultiplayerScoreboardHUD() {
+        const scoreboard = document.getElementById('mp-scoreboard-list');
+        if (!scoreboard) return;
+        scoreboard.innerHTML = '';
         
-        // Sync score deduction
-        if (window.gameMultiplayer.isHost) {
-            this.score = data.scoreP1;
-            this.opponentScore = data.scoreP2;
-        } else {
-            this.score = data.scoreP2;
-            this.opponentScore = data.scoreP1;
+        // Sort players by score descending
+        const sorted = [...window.gameMultiplayer.players].sort((a, b) => b.score - a.score);
+        
+        sorted.forEach(p => {
+            const isMe = p.id === window.gameMultiplayer.myPeerId;
+            const item = document.createElement('div');
+            item.className = `mp-scoreboard-item ${isMe ? 'is-me' : ''}`;
             
-            if (data.playerIndex === 2) {
-                this.showNegativePointsIndicator(obj.x, obj.y, -10);
-            }
-        }
-        document.getElementById('p1-score-val').innerText = data.scoreP1;
-        document.getElementById('p2-score-val').innerText = data.scoreP2;
-        
-        this.triggerBombExplosionLocal(obj);
+            const displayName = isMe ? `${p.name} (BẠN)` : p.name;
+            
+            item.innerHTML = `
+                <div class="player-name-tag">
+                    <span class="player-color-dot" style="background-color: ${p.color}; color: ${p.color}"></span>
+                    <span>${displayName}</span>
+                </div>
+                <span class="player-score-tag">${p.score}</span>
+            `;
+            scoreboard.appendChild(item);
+        });
     }
     
     sliceObject(obj, p1, p2) {
@@ -1401,7 +1437,7 @@ class GameEngine {
                     // Sync time with Client once per second
                     if (displaySec !== this.lastSyncedTime) {
                         this.lastSyncedTime = displaySec;
-                        window.gameMultiplayer.send({
+                        window.gameMultiplayer.broadcast({
                             type: 'sync-time',
                             time: this.timeRemaining
                         });
@@ -1558,41 +1594,49 @@ class GameEngine {
             this.ctx.shadowBlur = 0; // reset
         }
         
-        // 6. Draw Opponent Blade Swipe Trail (in multiplayer)
-        if (this.isMultiplayer && window.gameMultiplayer.opponentSwipePoints && window.gameMultiplayer.opponentSwipePoints.length >= 2) {
-            const points = window.gameMultiplayer.opponentSwipePoints;
-            
-            this.ctx.shadowBlur = 15;
-            this.ctx.shadowColor = '#00c6ff';
-            
-            this.ctx.beginPath();
-            this.ctx.moveTo(points[0].x, points[0].y);
-            
-            for (let i = 1; i < points.length; i++) {
-                const xc = (points[i].x + points[i - 1].x) / 2;
-                const yc = (points[i].y + points[i - 1].y) / 2;
-                this.ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
-            }
-            
-            this.ctx.strokeStyle = '#ffffff';
-            this.ctx.lineWidth = 4;
-            this.ctx.lineCap = 'round';
-            this.ctx.lineJoin = 'round';
-            this.ctx.stroke();
-            
-            // Outer blade neon sheath
-            this.ctx.beginPath();
-            this.ctx.moveTo(points[0].x, points[0].y);
-            for (let i = 1; i < points.length; i++) {
-                const xc = (points[i].x + points[i - 1].x) / 2;
-                const yc = (points[i].y + points[i - 1].y) / 2;
-                this.ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
-            }
-            this.ctx.strokeStyle = 'rgba(0, 198, 255, 0.45)';
-            this.ctx.lineWidth = 10;
-            this.ctx.stroke();
-            
-            this.ctx.shadowBlur = 0; // reset
+        // 6. Draw Player Trails (Only Host draws all player trails in multiplayer)
+        if (this.isMultiplayer && window.gameMultiplayer.players) {
+            window.gameMultiplayer.players.forEach(p => {
+                // If it is client, they only draw their own trail (already done above)
+                const isMe = p.id === window.gameMultiplayer.myPeerId;
+                if (!window.gameMultiplayer.isHost && isMe) return; 
+                
+                const points = p.swipePoints;
+                if (!points || points.length < 2) return;
+                
+                this.ctx.save();
+                this.ctx.shadowBlur = 15;
+                this.ctx.shadowColor = p.color;
+                
+                this.ctx.beginPath();
+                this.ctx.moveTo(points[0].x, points[0].y);
+                
+                for (let i = 1; i < points.length; i++) {
+                    const xc = (points[i].x + points[i - 1].x) / 2;
+                    const yc = (points[i].y + points[i - 1].y) / 2;
+                    this.ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+                }
+                
+                this.ctx.strokeStyle = '#ffffff';
+                this.ctx.lineWidth = 4;
+                this.ctx.lineCap = 'round';
+                this.ctx.lineJoin = 'round';
+                this.ctx.stroke();
+                
+                // Outer neon sheath in player color
+                this.ctx.beginPath();
+                this.ctx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    const xc = (points[i].x + points[i - 1].x) / 2;
+                    const yc = (points[i].y + points[i - 1].y) / 2;
+                    this.ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+                }
+                this.ctx.strokeStyle = p.color + '73'; // 45% transparency hex alpha is 73
+                this.ctx.lineWidth = 10;
+                this.ctx.stroke();
+                
+                this.ctx.restore();
+            });
         }
     }
 }
