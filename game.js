@@ -94,6 +94,12 @@ class GameEngine {
         this.spawnTimer = 0;
         this.spawnInterval = 1200; // ms between spawns
         
+        // Multiplayer State
+        this.isMultiplayer = false;
+        this.opponentScore = 0;
+        this.fruitIdCounter = 0;
+        this.lastSyncedTime = 0;
+        
         this.fruits = [];
         this.particles = [];
         this.backgroundSplats = [];
@@ -130,6 +136,8 @@ class GameEngine {
         this.loadAudioSetting();
         this.renderLeaderboard('classic');
         
+        window.gameInstance = this;
+        
         // Start animation loop
         requestAnimationFrame((t) => this.loop(t));
     }
@@ -144,6 +152,28 @@ class GameEngine {
     }
     
     // --- State Management ---
+    
+    startMultiplayerGame() {
+        this.isMultiplayer = true;
+        this.opponentScore = 0;
+        this.fruitIdCounter = 0;
+        this.lastSyncedTime = 0;
+        
+        // Hide single score, show dual scores
+        document.getElementById('single-score-box').classList.add('hidden');
+        document.getElementById('multi-score-box').classList.remove('hidden');
+        
+        // Assign player names based on role
+        const isHost = window.gameMultiplayer.isHost;
+        document.getElementById('p1-name').innerText = isHost ? 'BẠN (HOST)' : 'HOST';
+        document.getElementById('p2-name').innerText = isHost ? 'ĐỐI THỦ' : 'BẠN';
+        
+        document.getElementById('p1-score-val').innerText = '0';
+        document.getElementById('p2-score-val').innerText = '0';
+        
+        // Multiplayer is Zen mode base (90s, no lives, just score comparison)
+        this.startGame('ZEN');
+    }
     
     startGame(mode) {
         window.gameAudio.resume();
@@ -193,7 +223,12 @@ class GameEngine {
             this.spawnInterval = 850;
         }
         
-        document.getElementById('score-val').innerText = '0';
+        // In multiplayer, score updates are driven separately
+        if (!this.isMultiplayer) {
+            document.getElementById('single-score-box').classList.remove('hidden');
+            document.getElementById('multi-score-box').classList.add('hidden');
+            document.getElementById('score-val').innerText = '0';
+        }
         
         // Start background music
         window.gameAudio.startBGM();
@@ -204,6 +239,10 @@ class GameEngine {
     
     pauseGame() {
         if (this.gameState !== 'PLAYING') return;
+        if (this.isMultiplayer && !window.gameMultiplayer.isHost) {
+            alert('Chỉ chủ phòng (Host) mới có quyền tạm dừng!');
+            return;
+        }
         window.gameAudio.playClick();
         
         this.gameState = 'PAUSED';
@@ -213,16 +252,52 @@ class GameEngine {
         document.getElementById('pause-screen').classList.remove('hidden');
         document.getElementById('pause-screen').classList.add('active');
         document.getElementById('btn-gameplay-pause').classList.add('hidden');
+        
+        if (this.isMultiplayer && window.gameMultiplayer.isHost) {
+            window.gameMultiplayer.send({ type: 'pause' });
+        }
+    }
+    
+    syncPause() {
+        this.gameState = 'PAUSED';
+        window.gameAudio.stopBGM();
+        window.gameAudio.stopFuseSizzle();
+        document.getElementById('pause-screen').classList.remove('hidden');
+        document.getElementById('pause-screen').classList.add('active');
+        document.getElementById('btn-gameplay-pause').classList.add('hidden');
     }
     
     resumeGame() {
         if (this.gameState !== 'PAUSED') return;
+        if (this.isMultiplayer && !window.gameMultiplayer.isHost) {
+            alert('Chỉ chủ phòng (Host) mới có quyền tiếp tục!');
+            return;
+        }
         window.gameAudio.playClick();
         
         this.gameState = 'PLAYING';
         window.gameAudio.startBGM();
         
         // Check if there are active bombs, restart their sizzle sound
+        const hasBomb = this.fruits.some(f => f.isBomb && !f.sliced);
+        if (hasBomb) {
+            window.gameAudio.startFuseSizzle();
+        }
+        
+        document.getElementById('pause-screen').classList.add('hidden');
+        document.getElementById('pause-screen').classList.remove('active');
+        document.getElementById('btn-gameplay-pause').classList.remove('hidden');
+        this.lastTime = performance.now();
+        
+        if (this.isMultiplayer && window.gameMultiplayer.isHost) {
+            window.gameMultiplayer.send({ type: 'resume' });
+        }
+    }
+    
+    syncResume() {
+        this.gameState = 'PLAYING';
+        window.gameAudio.startBGM();
+        
         const hasBomb = this.fruits.some(f => f.isBomb && !f.sliced);
         if (hasBomb) {
             window.gameAudio.startFuseSizzle();
@@ -245,6 +320,16 @@ class GameEngine {
         document.getElementById('btn-gameplay-pause').classList.add('hidden');
         document.getElementById('menu-screen').classList.remove('hidden');
         document.getElementById('menu-screen').classList.add('active');
+        
+        if (this.isMultiplayer) {
+            window.gameMultiplayer.send({ type: 'exit' });
+            window.gameMultiplayer.cleanup();
+            this.isMultiplayer = false;
+        }
+        
+        // Restore single score HUD
+        document.getElementById('single-score-box').classList.remove('hidden');
+        document.getElementById('multi-score-box').classList.add('hidden');
     }
     
     gameOver() {
@@ -257,24 +342,104 @@ class GameEngine {
         document.getElementById('game-over-screen').classList.remove('hidden');
         document.getElementById('game-over-screen').classList.add('active');
         
-        // Stats
-        document.getElementById('game-over-mode-title').innerText = `CHẾ ĐỘ ${this.gameMode}`;
-        document.getElementById('final-score').innerText = this.score;
-        document.getElementById('max-combo').innerText = `${this.maxCombo}x`;
-        document.getElementById('sliced-count').innerText = this.slicedCount;
-        
-        // Check High Score
-        const isQualified = this.checkHighScoreEligibility(this.gameMode.toLowerCase(), this.score);
         const nameInputBox = document.getElementById('name-input-container');
         const newHighScoreBanner = document.getElementById('new-high-score-banner');
         
-        if (isQualified && this.score > 0) {
-            nameInputBox.classList.remove('hidden');
-            newHighScoreBanner.classList.remove('hidden');
-            document.getElementById('player-name-input').value = localStorage.getItem('fruitSlasher_lastPlayer') || '';
-        } else {
+        if (this.isMultiplayer) {
+            // Multiplayer Game Over
+            document.getElementById('game-over-mode-title').innerText = 'ĐỐI KHÁNG MULTIPLAYER';
+            
+            const isHost = window.gameMultiplayer.isHost;
+            const myScore = this.score;
+            const opScore = this.opponentScore;
+            
+            document.getElementById('final-score').innerText = `${myScore} - ${opScore}`;
+            document.getElementById('max-combo').innerText = `${this.maxCombo}x`;
+            document.getElementById('sliced-count').innerText = this.slicedCount;
+            
             nameInputBox.classList.add('hidden');
-            newHighScoreBanner.classList.add('hidden');
+            newHighScoreBanner.classList.remove('hidden');
+            
+            if (myScore > opScore) {
+                newHighScoreBanner.innerText = '★ BẠN ĐÃ CHIẾN THẮNG! ★';
+                newHighScoreBanner.style.background = 'linear-gradient(90deg, #4cd964, #5ac8fa)';
+                newHighScoreBanner.style.color = '#fff';
+            } else if (myScore < opScore) {
+                newHighScoreBanner.innerText = '☠ BẠN ĐÃ THUA CUỘC! ☠';
+                newHighScoreBanner.style.background = 'linear-gradient(90deg, #ff3b30, #ff9500)';
+                newHighScoreBanner.style.color = '#fff';
+            } else {
+                newHighScoreBanner.innerText = '☯ HÒA NHAU! ☯';
+                newHighScoreBanner.style.background = 'linear-gradient(90deg, #8e8e93, #d1d1d6)';
+                newHighScoreBanner.style.color = '#000';
+            }
+            
+            // Host sends score to Client
+            if (isHost) {
+                window.gameMultiplayer.send({
+                    type: 'game-over',
+                    scoreP1: myScore, // P1 score (Host)
+                    scoreP2: opScore  // P2 score (Client)
+                });
+            }
+        } else {
+            // Single Player Game Over
+            document.getElementById('game-over-mode-title').innerText = `CHẾ ĐỘ ${this.gameMode}`;
+            document.getElementById('final-score').innerText = this.score;
+            document.getElementById('max-combo').innerText = `${this.maxCombo}x`;
+            document.getElementById('sliced-count').innerText = this.slicedCount;
+            
+            const isQualified = this.checkHighScoreEligibility(this.gameMode.toLowerCase(), this.score);
+            if (isQualified && this.score > 0) {
+                nameInputBox.classList.remove('hidden');
+                newHighScoreBanner.classList.remove('hidden');
+                newHighScoreBanner.innerText = '★ KỶ LỤC MỚI! ★';
+                newHighScoreBanner.style.background = ''; // reset
+                newHighScoreBanner.style.color = '';
+                document.getElementById('player-name-input').value = localStorage.getItem('fruitSlasher_lastPlayer') || '';
+            } else {
+                nameInputBox.classList.add('hidden');
+                newHighScoreBanner.classList.add('hidden');
+            }
+        }
+    }
+    
+    syncMultiplayerGameOver(data) {
+        // Client side game over syncer
+        this.gameState = 'GAMEOVER';
+        window.gameAudio.stopBGM();
+        window.gameAudio.stopFuseSizzle();
+        window.gameAudio.playGameOverChime();
+        
+        document.getElementById('btn-gameplay-pause').classList.add('hidden');
+        document.getElementById('game-over-screen').classList.remove('hidden');
+        document.getElementById('game-over-screen').classList.add('active');
+        
+        document.getElementById('game-over-mode-title').innerText = 'ĐỐI KHÁNG MULTIPLAYER';
+        
+        const myScore = this.score;
+        const opScore = this.opponentScore;
+        
+        document.getElementById('final-score').innerText = `${myScore} - ${opScore}`;
+        document.getElementById('max-combo').innerText = `${this.maxCombo}x`;
+        document.getElementById('sliced-count').innerText = this.slicedCount;
+        
+        document.getElementById('name-input-container').classList.add('hidden');
+        const banner = document.getElementById('new-high-score-banner');
+        banner.classList.remove('hidden');
+        
+        if (myScore > opScore) {
+            banner.innerText = '★ BẠN ĐÃ CHIẾN THẮNG! ★';
+            banner.style.background = 'linear-gradient(90deg, #4cd964, #5ac8fa)';
+            banner.style.color = '#fff';
+        } else if (myScore < opScore) {
+            banner.innerText = '☠ BẠN ĐÃ THUA CUỘC! ☠';
+            banner.style.background = 'linear-gradient(90deg, #ff3b30, #ff9500)';
+            banner.style.color = '#fff';
+        } else {
+            banner.innerText = '☯ HÒA NHAU! ☯';
+            banner.style.background = 'linear-gradient(90deg, #8e8e93, #d1d1d6)';
+            banner.style.color = '#000';
         }
     }
     
@@ -336,6 +501,10 @@ class GameEngine {
                 }
             }
             
+            if (this.isMultiplayer) {
+                window.gameMultiplayer.sendSwipe(this.swipePoints);
+            }
+            
             // Check for cuts with active fruits
             this.checkCollisions();
         };
@@ -345,6 +514,10 @@ class GameEngine {
             // Evaluate combo if any
             this.evaluateCombo();
             this.swipePoints = [];
+            
+            if (this.isMultiplayer) {
+                window.gameMultiplayer.sendSwipe([]);
+            }
         };
         
         // Mouse Listeners
@@ -386,16 +559,42 @@ class GameEngine {
         document.getElementById('btn-zen').addEventListener('click', () => this.startGame('ZEN'));
         document.getElementById('btn-arcade').addEventListener('click', () => this.startGame('ARCADE'));
         
+        // Multiplayer Trigger
+        document.getElementById('btn-multiplayer').addEventListener('click', () => {
+            window.gameMultiplayer.showScreen();
+        });
+        document.getElementById('btn-mp-create').addEventListener('click', () => {
+            window.gameMultiplayer.createRoom();
+        });
+        document.getElementById('btn-mp-join').addEventListener('click', () => {
+            window.gameMultiplayer.joinRoom();
+        });
+        document.getElementById('btn-mp-back').addEventListener('click', () => {
+            window.gameMultiplayer.backToMenu();
+        });
+        
         // Gameplay pause trigger
         document.getElementById('btn-gameplay-pause').addEventListener('click', () => this.pauseGame());
         
         // Modal buttons
         document.getElementById('btn-resume').addEventListener('click', () => this.resumeGame());
-        document.getElementById('btn-restart-pause').addEventListener('click', () => this.startGame(this.gameMode));
+        document.getElementById('btn-restart-pause').addEventListener('click', () => {
+            if (this.isMultiplayer) {
+                alert('Không thể chơi lại trực tiếp trong phòng chơi nhiều người!');
+                return;
+            }
+            this.startGame(this.gameMode);
+        });
         document.getElementById('btn-exit-pause').addEventListener('click', () => this.exitToMenu());
         
         // Retry/Menu
-        document.getElementById('btn-retry').addEventListener('click', () => this.startGame(this.gameMode));
+        document.getElementById('btn-retry').addEventListener('click', () => {
+            if (this.isMultiplayer) {
+                this.exitToMenu();
+                return;
+            }
+            this.startGame(this.gameMode);
+        });
         document.getElementById('btn-menu').addEventListener('click', () => this.exitToMenu());
         
         // Save score
@@ -570,17 +769,40 @@ class GameEngine {
             }
         }
         
+        let obj = null;
+        let chosenConfig = null;
         if (objectType === 'BOMB') {
-            this.fruits.push(new BombObject(spawnX, spawnY, vx, vy, spinSpeed));
+            obj = new BombObject(spawnX, spawnY, vx, vy, spinSpeed);
             window.gameAudio.startFuseSizzle();
         } else if (objectType === 'POWERUP') {
             const types = Object.keys(ARCADE_POWERUPS);
             const chosen = ARCADE_POWERUPS[types[Math.floor(Math.random() * types.length)]];
-            this.fruits.push(new PowerupBanana(spawnX, spawnY, vx, vy, spinSpeed, chosen));
+            obj = new PowerupBanana(spawnX, spawnY, vx, vy, spinSpeed, chosen);
+            chosenConfig = chosen;
         } else {
             const keys = Object.keys(FRUIT_TYPES);
             const chosen = FRUIT_TYPES[keys[Math.floor(Math.random() * keys.length)]];
-            this.fruits.push(new FruitObject(spawnX, spawnY, vx, vy, spinSpeed, chosen));
+            obj = new FruitObject(spawnX, spawnY, vx, vy, spinSpeed, chosen);
+            chosenConfig = chosen;
+        }
+        
+        obj.id = this.fruitIdCounter++;
+        this.fruits.push(obj);
+        
+        // Broadcast spawn if host
+        if (this.isMultiplayer && window.gameMultiplayer.isHost) {
+            window.gameMultiplayer.send({
+                type: 'spawn',
+                id: obj.id,
+                objectType: objectType,
+                x: spawnX,
+                y: spawnY,
+                vx: vx,
+                vy: vy,
+                spinSpeed: spinSpeed,
+                powerupType: obj.powerupType || null,
+                fruitTypeName: objectType === 'FRUIT' ? Object.keys(FRUIT_TYPES).find(key => FRUIT_TYPES[key].name === obj.name) : null
+            });
         }
     }
     
@@ -615,9 +837,240 @@ class GameEngine {
             if (obj.sliced) continue;
             
             if (this.lineCircleIntersect(p1, p2, obj, obj.radius)) {
-                this.sliceObject(obj, p1, p2);
+                const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                if (this.isMultiplayer) {
+                    if (window.gameMultiplayer.isHost) {
+                        this.verifyHostSlice(obj.id, angle, obj.x, obj.y);
+                    } else {
+                        window.gameMultiplayer.send({
+                            type: 'slice',
+                            id: obj.id,
+                            angle: angle,
+                            hitX: obj.x,
+                            hitY: obj.y
+                        });
+                    }
+                } else {
+                    this.sliceObject(obj, p1, p2);
+                }
             }
         }
+    }
+    
+    // --- WebRTC Multiplayer Sync Hooks ---
+    
+    syncSpawnFruit(data) {
+        // Client side spawning driven by Host coordinates
+        let obj = null;
+        if (data.objectType === 'BOMB') {
+            obj = new BombObject(data.x, data.y, data.vx, data.vy, data.spinSpeed);
+            window.gameAudio.startFuseSizzle();
+        } else if (data.objectType === 'POWERUP') {
+            const types = Object.keys(ARCADE_POWERUPS);
+            const chosen = ARCADE_POWERUPS[types.find(key => ARCADE_POWERUPS[key].type === data.powerupType)];
+            obj = new PowerupBanana(data.x, data.y, data.vx, data.vy, data.spinSpeed, chosen);
+        } else {
+            const chosen = FRUIT_TYPES[data.fruitTypeName];
+            obj = new FruitObject(data.x, data.y, data.vx, data.vy, data.spinSpeed, chosen);
+        }
+        
+        obj.id = data.id;
+        this.fruits.push(obj);
+    }
+    
+    verifyHostSlice(fruitId, angle, hitX, hitY) {
+        const obj = this.fruits.find(f => f.id === fruitId);
+        if (!obj || obj.sliced) return;
+        
+        if (obj.isBomb) {
+            if (this.gameMode === 'CLASSIC') {
+                this.gameOver();
+            } else {
+                this.score = Math.max(0, this.score - 10);
+                document.getElementById('p1-score-val').innerText = this.score;
+                window.gameMultiplayer.send({
+                    type: 'bomb-slice',
+                    playerIndex: 1,
+                    scoreP1: this.score,
+                    scoreP2: this.opponentScore,
+                    fruitId: fruitId
+                });
+                this.triggerBombExplosionLocal(obj);
+            }
+        } else {
+            // Calculate score with powerups
+            const doubleActive = this.activePowerups.double > performance.now();
+            const pointsGained = obj.points * (doubleActive ? 2 : 1);
+            this.score += pointsGained;
+            
+            // Trigger local HUD combo queue additions
+            this.swipeSliceQueue.push(obj);
+            if (this.comboResetTimer) clearTimeout(this.comboResetTimer);
+            this.comboResetTimer = setTimeout(() => this.evaluateCombo(), 180);
+            
+            // Broadcast slice confirmation to Client
+            window.gameMultiplayer.send({
+                type: 'slice-confirmed',
+                id: fruitId,
+                playerIndex: 1,
+                scoreP1: this.score,
+                scoreP2: this.opponentScore,
+                hitX: hitX,
+                hitY: hitY,
+                angle: angle
+            });
+            
+            // Execute locally
+            this.executeSliceLocal(obj, hitX, hitY, angle, 1);
+        }
+    }
+    
+    verifyClientSlice(fruitId, angle, hitX, hitY) {
+        const obj = this.fruits.find(f => f.id === fruitId);
+        if (!obj || obj.sliced) return;
+        
+        if (obj.isBomb) {
+            if (this.gameMode === 'CLASSIC') {
+                this.gameOver();
+            } else {
+                this.opponentScore = Math.max(0, this.opponentScore - 10);
+                document.getElementById('p2-score-val').innerText = this.opponentScore;
+                window.gameMultiplayer.send({
+                    type: 'bomb-slice',
+                    playerIndex: 2,
+                    scoreP1: this.score,
+                    scoreP2: this.opponentScore,
+                    fruitId: fruitId
+                });
+                this.triggerBombExplosionLocal(obj);
+            }
+        } else {
+            // Calculate score for P2 (Client)
+            this.opponentScore += obj.points; // simpler, powerups only apply to who slices
+            
+            window.gameMultiplayer.send({
+                type: 'slice-confirmed',
+                id: fruitId,
+                playerIndex: 2,
+                scoreP1: this.score,
+                scoreP2: this.opponentScore,
+                hitX: hitX,
+                hitY: hitY,
+                angle: angle
+            });
+            
+            this.executeSliceLocal(obj, hitX, hitY, angle, 2);
+        }
+    }
+    
+    syncSliceExecution(data) {
+        const obj = this.fruits.find(f => f.id === data.id);
+        if (!obj) return;
+        
+        // Sync Scores
+        if (window.gameMultiplayer.isHost) {
+            this.score = data.scoreP1;
+            this.opponentScore = data.scoreP2;
+        } else {
+            this.score = data.scoreP2;
+            this.opponentScore = data.scoreP1;
+            
+            // Add combo check locally if client sliced it
+            if (data.playerIndex === 2) {
+                this.swipeSliceQueue.push(obj);
+                if (this.comboResetTimer) clearTimeout(this.comboResetTimer);
+                this.comboResetTimer = setTimeout(() => this.evaluateCombo(), 180);
+            }
+        }
+        
+        document.getElementById('p1-score-val').innerText = data.scoreP1;
+        document.getElementById('p2-score-val').innerText = data.scoreP2;
+        
+        // Execute splice split and juice rendering
+        this.executeSliceLocal(obj, data.hitX, data.hitY, data.angle, data.playerIndex);
+    }
+    
+    executeSliceLocal(obj, hitX, hitY, angle, playerIndex) {
+        obj.sliced = true;
+        obj.sliceAngle = angle;
+        
+        window.gameAudio.playSplat(obj.powerupType || 'default');
+        
+        // Split halves
+        const leftHalf = {
+            x: obj.x,
+            y: obj.y,
+            vx: obj.vx - Math.sin(angle) * 3 - Math.cos(angle) * 1.5,
+            vy: obj.vy + Math.cos(angle) * 3 - Math.sin(angle) * 1.5,
+            spin: -0.06 - Math.random() * 0.05
+        };
+        const rightHalf = {
+            x: obj.x,
+            y: obj.y,
+            vx: obj.vx + Math.sin(angle) * 3 + Math.cos(angle) * 1.5,
+            vy: obj.vy - Math.cos(angle) * 3 + Math.sin(angle) * 1.5,
+            spin: 0.06 + Math.random() * 0.05
+        };
+        obj.halves = [leftHalf, rightHalf];
+        
+        const isMe = (window.gameMultiplayer.isHost && playerIndex === 1) || (!window.gameMultiplayer.isHost && playerIndex === 2);
+        if (isMe) {
+            this.slicedCount++;
+        }
+        const splatColor = isMe ? obj.juiceColor : '#00c6ff';
+        
+        this.backgroundSplats.push(new BackgroundSplat(hitX, hitY, splatColor));
+        
+        // Particles
+        const particleCount = 10 + Math.floor(Math.random() * 6);
+        for (let i = 0; i < particleCount; i++) {
+            const pAngle = angle + (Math.random() - 0.5) * Math.PI;
+            const speed = 2 + Math.random() * 5;
+            const vx = Math.cos(pAngle) * speed + obj.vx * 0.5;
+            const vy = Math.sin(pAngle) * speed + obj.vy * 0.5;
+            this.particles.push(new JuiceParticle(hitX, hitY, vx, vy, splatColor));
+        }
+        
+        if (obj.isPowerup) {
+            this.activatePowerup(obj.powerupType);
+        }
+    }
+    
+    triggerBombExplosionLocal(obj) {
+        obj.sliced = true;
+        window.gameAudio.playExplosion();
+        this.triggerScreenShake(15, 500);
+        
+        for (let i = 0; i < 30; i++) {
+            const pAngle = Math.random() * Math.PI * 2;
+            const speed = 3 + Math.random() * 8;
+            const vx = Math.cos(pAngle) * speed;
+            const vy = Math.sin(pAngle) * speed;
+            const color = Math.random() > 0.4 ? '#ff5e00' : '#444';
+            this.particles.push(new ExplosionParticle(obj.x, obj.y, vx, vy, color));
+        }
+    }
+    
+    syncBombExplosion(data) {
+        const obj = this.fruits.find(f => f.id === data.fruitId);
+        if (!obj) return;
+        
+        // Sync score deduction
+        if (window.gameMultiplayer.isHost) {
+            this.score = data.scoreP1;
+            this.opponentScore = data.scoreP2;
+        } else {
+            this.score = data.scoreP2;
+            this.opponentScore = data.scoreP1;
+            
+            if (data.playerIndex === 2) {
+                this.showNegativePointsIndicator(obj.x, obj.y, -10);
+            }
+        }
+        document.getElementById('p1-score-val').innerText = data.scoreP1;
+        document.getElementById('p2-score-val').innerText = data.scoreP2;
+        
+        this.triggerBombExplosionLocal(obj);
     }
     
     sliceObject(obj, p1, p2) {
@@ -939,25 +1392,52 @@ class GameEngine {
         
         // Handle Game Mode Timers
         if (this.gameMode === 'ZEN' || this.gameMode === 'ARCADE') {
-            this.timeRemaining -= delta / 1000;
-            document.getElementById('timer-val').innerText = Math.max(0, Math.ceil(this.timeRemaining));
-            
-            if (this.timeRemaining <= 0) {
-                this.gameOver();
-                return;
+            if (this.isMultiplayer) {
+                if (window.gameMultiplayer.isHost) {
+                    this.timeRemaining -= delta / 1000;
+                    const displaySec = Math.max(0, Math.ceil(this.timeRemaining));
+                    document.getElementById('timer-val').innerText = displaySec;
+                    
+                    // Sync time with Client once per second
+                    if (displaySec !== this.lastSyncedTime) {
+                        this.lastSyncedTime = displaySec;
+                        window.gameMultiplayer.send({
+                            type: 'sync-time',
+                            time: this.timeRemaining
+                        });
+                    }
+                    
+                    if (this.timeRemaining <= 0) {
+                        this.gameOver();
+                        return;
+                    }
+                } else {
+                    // Client just displays what was synchronized
+                    document.getElementById('timer-val').innerText = Math.max(0, Math.ceil(this.timeRemaining));
+                }
+            } else {
+                this.timeRemaining -= delta / 1000;
+                document.getElementById('timer-val').innerText = Math.max(0, Math.ceil(this.timeRemaining));
+                
+                if (this.timeRemaining <= 0) {
+                    this.gameOver();
+                    return;
+                }
             }
         }
         
-        // Handle spawning
-        this.spawnTimer += delta;
-        
-        // Double fruit spawner speed if Frenzy active
-        const frenzyActive = (this.gameMode === 'ARCADE' && this.activePowerups.frenzy > now);
-        const adjustedInterval = frenzyActive ? this.spawnInterval * 0.4 : this.spawnInterval;
-        
-        if (this.spawnTimer >= adjustedInterval) {
-            this.spawnFruitWave();
-            this.spawnTimer = 0;
+        // Handle spawning (Only Host spawns in multiplayer)
+        if (!this.isMultiplayer || window.gameMultiplayer.isHost) {
+            this.spawnTimer += delta;
+            
+            // Double fruit spawner speed if Frenzy active
+            const frenzyActive = (this.gameMode === 'ARCADE' && this.activePowerups.frenzy > now);
+            const adjustedInterval = frenzyActive ? this.spawnInterval * 0.4 : this.spawnInterval;
+            
+            if (this.spawnTimer >= adjustedInterval) {
+                this.spawnFruitWave();
+                this.spawnTimer = 0;
+            }
         }
         
         // Background Splats Updates
@@ -1072,6 +1552,43 @@ class GameEngine {
                 this.ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
             }
             this.ctx.strokeStyle = 'rgba(255, 94, 0, 0.45)';
+            this.ctx.lineWidth = 10;
+            this.ctx.stroke();
+            
+            this.ctx.shadowBlur = 0; // reset
+        }
+        
+        // 6. Draw Opponent Blade Swipe Trail (in multiplayer)
+        if (this.isMultiplayer && window.gameMultiplayer.opponentSwipePoints && window.gameMultiplayer.opponentSwipePoints.length >= 2) {
+            const points = window.gameMultiplayer.opponentSwipePoints;
+            
+            this.ctx.shadowBlur = 15;
+            this.ctx.shadowColor = '#00c6ff';
+            
+            this.ctx.beginPath();
+            this.ctx.moveTo(points[0].x, points[0].y);
+            
+            for (let i = 1; i < points.length; i++) {
+                const xc = (points[i].x + points[i - 1].x) / 2;
+                const yc = (points[i].y + points[i - 1].y) / 2;
+                this.ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+            }
+            
+            this.ctx.strokeStyle = '#ffffff';
+            this.ctx.lineWidth = 4;
+            this.ctx.lineCap = 'round';
+            this.ctx.lineJoin = 'round';
+            this.ctx.stroke();
+            
+            // Outer blade neon sheath
+            this.ctx.beginPath();
+            this.ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                const xc = (points[i].x + points[i - 1].x) / 2;
+                const yc = (points[i].y + points[i - 1].y) / 2;
+                this.ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+            }
+            this.ctx.strokeStyle = 'rgba(0, 198, 255, 0.45)';
             this.ctx.lineWidth = 10;
             this.ctx.stroke();
             

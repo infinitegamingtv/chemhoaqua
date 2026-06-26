@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=Playfair+Display:ital,wght@1,900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <!-- WebRTC PeerJS Client -->
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
     <div id="game-container">
@@ -22,9 +24,20 @@
         <div id="hud-layer" class="overlay-layer pointer-events-none">
             <div class="hud-top">
                 <div class="hud-left">
-                    <div class="score-container">
+                    <div class="score-container" id="single-score-box">
                         <span class="hud-label">ĐIỂM SỐ</span>
                         <span id="score-val" class="hud-value">0</span>
+                    </div>
+                    <div class="multi-score-container hidden" id="multi-score-box">
+                        <div class="score-sub-box host">
+                            <span class="hud-label" id="p1-name">BẠN</span>
+                            <span id="p1-score-val" class="hud-value color-p1">0</span>
+                        </div>
+                        <div class="score-vs-divider">VS</div>
+                        <div class="score-sub-box client">
+                            <span class="hud-label" id="p2-name">ĐỐI THỦ</span>
+                            <span id="p2-score-val" class="hud-value color-p2">0</span>
+                        </div>
                     </div>
                     <div id="combo-display" class="hud-combo">
                         <span id="combo-count">3x</span> COMBO!
@@ -91,6 +104,13 @@
                             <small>60s cuồng nhiệt, chuối bổ trợ đặc biệt</small>
                         </span>
                     </button>
+                    <button class="btn btn-secondary" id="btn-multiplayer" style="background: linear-gradient(135deg, #af52de, #5500aa); border-bottom: 4px solid #330066;">
+                        <span class="btn-icon">🌐</span>
+                        <span class="btn-text">
+                            <strong>CHƠI NHIỀU NGƯỜI</strong>
+                            <small>Đấu tay đôi qua WebRTC bằng mã phòng</small>
+                        </span>
+                    </button>
                 </div>
 
                 <!-- Bottom Bar (Audio Toggle & Leaderboard Link) -->
@@ -108,6 +128,51 @@
                             <path fill="currentColor" d="M2,21H22V19H2V21M9,17H15V8H9V17M2,17H8V11H2V17M16,17H22V5H16V17Z" />
                         </svg>
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Multiplayer Connection Screen Overlay -->
+        <div id="multiplayer-screen" class="screen-overlay hidden">
+            <div class="modal-card">
+                <h2>CHƠI NHIỀU NGƯỜI (WEBRTC)</h2>
+                
+                <!-- Initial Panel -->
+                <div id="mp-initial-panel" style="width: 100%;">
+                    <p style="margin-bottom: 20px; font-size: 14px; color: var(--text-muted);">
+                        Chém hoa quả đối kháng thời gian thực. Chọn một trong hai lựa chọn bên dưới:
+                    </p>
+                    <div class="btn-group-vertical">
+                        <button class="btn btn-primary" id="btn-mp-create">TẠO PHÒNG MỚI</button>
+                        <div style="margin: 15px 0; color: var(--text-muted); font-weight: 800; font-size: 12px; letter-spacing: 2px;">HOẶC</div>
+                        <div class="input-room-box" style="display: flex; gap: 8px; width: 100%; max-width: 380px;">
+                            <input type="text" id="join-room-input" placeholder="Nhập mã phòng..." maxlength="6" style="flex: 1; padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); color: #fff; text-align: center; text-transform: uppercase; font-family: var(--font-display); font-size: 16px; font-weight: 800; letter-spacing: 2px;" />
+                            <button class="btn btn-accent small" id="btn-mp-join" style="margin: 0; padding: 12px 24px; max-width: fit-content; border-radius: 12px;">VÀO</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Host Panel -->
+                <div id="mp-host-panel" class="hidden" style="width: 100%;">
+                    <p style="color: var(--text-muted); margin-bottom: 12px;">Đang khởi tạo phòng...</p>
+                    <div class="room-code-display" style="background: rgba(0,0,0,0.25); border: 1px solid var(--glass-border); padding: 16px; border-radius: 16px; margin-bottom: 16px;">
+                        <span class="hud-label" style="display: block; margin-bottom: 8px;">MÃ PHÒNG CỦA BẠN:</span>
+                        <div class="code-box" style="display: flex; align-items: center; justify-content: center; gap: 12px;">
+                            <span id="generated-room-code" style="font-size: 28px; font-weight: 900; color: var(--accent-yellow); letter-spacing: 3px;">------</span>
+                            <button id="btn-copy-code" class="btn btn-secondary small" style="padding: 6px 12px; font-size:12px; margin: 0; border-radius: 8px;">COPY</button>
+                        </div>
+                    </div>
+                    <p class="status-msg" id="host-status-text" style="color: var(--accent-orange); font-weight: 800; font-size: 14px; animation: pulse 1s infinite alternate;">Đang đợi đối thủ kết nối...</p>
+                </div>
+                
+                <!-- Client Connecting Panel -->
+                <div id="mp-client-panel" class="hidden" style="width: 100%;">
+                    <p style="color: var(--text-muted); margin-bottom: 12px;">Đang kết nối tới phòng...</p>
+                    <p class="status-msg" id="client-status-text" style="color: var(--accent-yellow); font-weight: 800; font-size: 14px; animation: pulse 1s infinite alternate;">Vui lòng chờ...</p>
+                </div>
+                
+                <div class="modal-footer" style="margin-top: 24px; width: 100%; display: flex; justify-content: center;">
+                    <button class="btn btn-secondary small" id="btn-mp-back" style="margin:0;">Quay Lại Menu</button>
                 </div>
             </div>
         </div>
@@ -195,6 +260,7 @@
 
     <!-- Scripts -->
     <script src="audio.js"></script>
+    <script src="multiplayer.js"></script>
     <script src="game.js"></script>
 </body>
 </html>

@@ -139,6 +139,52 @@ body, html {
     border-bottom: 3px solid rgba(255, 106, 0, 0.3);
 }
 
+.multi-score-container {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: 12px 24px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    border-bottom: 3px solid rgba(175, 82, 222, 0.4);
+}
+
+.score-sub-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 80px;
+}
+
+.score-vs-divider {
+    font-size: 14px;
+    font-weight: 900;
+    color: var(--text-muted);
+    text-shadow: 0 0 8px rgba(0,0,0,0.5);
+    background: rgba(255,255,255,0.05);
+    padding: 6px;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.color-p1 {
+    color: var(--accent-orange) !important;
+    text-shadow: 0 0 10px rgba(255, 94, 0, 0.5) !important;
+}
+
+.color-p2 {
+    color: #00c6ff !important;
+    text-shadow: 0 0 10px rgba(0, 198, 255, 0.5) !important;
+}
+
 .hud-label {
     font-size: 11px;
     font-weight: 800;
@@ -963,7 +1009,44 @@ body, html {
     display: none !important;
 }
 
+/* WebRTC Room Styles */
+.mp-divider {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    margin: 15px 0;
+    color: var(--text-muted);
+}
+.mp-divider::before, .mp-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: rgba(255,255,255,0.1);
+}
+.mp-divider span {
+    padding: 0 10px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 2px;
+}
+
 @media (max-width: 480px) {
+    .multi-score-container {
+        padding: 6px 12px;
+        gap: 8px;
+    }
+    .score-sub-box {
+        min-width: 60px;
+    }
+    .score-sub-box .hud-value {
+        font-size: 20px;
+    }
+    .score-vs-divider {
+        width: 22px;
+        height: 22px;
+        font-size: 11px;
+    }
+    
     .hud-top {
         padding: 12px 16px;
     }
